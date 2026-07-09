@@ -6,3 +6,7 @@ __pycache__/
 *.pyc
 .DS_Store
 /tmp
+ssl/
+scan_all.py
+start_server.py
+run_server.py
