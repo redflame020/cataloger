@@ -21,7 +21,9 @@ echo "[2/3] Syncing data..."
 rsync -avz --progress "$LOCAL_DATA/" "$PI_HOST:$REMOTE_DIR/data/"
 
 echo "[3/3] Restarting server..."
-ssh "$PI_HOST" "sudo systemctl restart cataloger"
+ssh "$PI_HOST" "sudo systemctl restart cataloger 2>/dev/null || echo '(cataloger service not installed yet — skipping)'" || true
 
 echo ""
 echo "=== Done! ==="
+echo ""
+echo "If the cataloger service is not installed on the Pi, run setup-pi.sh there first."
