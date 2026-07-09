@@ -11,12 +11,11 @@ if (location.protocol !== 'https:' && location.hostname !== 'localhost' && !loca
 }
 </script>
 </head>
-<body class="cover-scan-body">
+<body>
 <nav>
   <a href="/" class="logo">📚 Cataloger</a>
   <div class="nav-links">
     <a href="/">Catalog</a>
-    <a href="/scan.html">Shelf</a>
     <a href="/scan-cover.html" class="active">Cover</a>
     <a href="/rooms.html">Rooms</a>
     <a href="/loans.html">Loans</a>
@@ -33,7 +32,7 @@ if (location.protocol !== 'https:' && location.hostname !== 'localhost' && !loca
     <div class="camera-overlay" id="camera-overlay" style="display:none">
       <div class="scanning-indicator" id="snap-status">Ready</div>
     </div>
-    <div id="snapped-indicator" style="display:none;text-align:center;padding:40px 0;color:#888">
+    <div id="snapped-indicator" class="snapped-indicator" style="display:none">
       <div style="font-size:48px;margin-bottom:8px">📸</div>
       <div>Processing...</div>
     </div>
