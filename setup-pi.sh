@@ -49,7 +49,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$SERVICE_DIR
-ExecStart=$MICROMAMBA_PATH run -n cataloger python3 $SERVICE_DIR/run_server.py --ssl
+ExecStart=/usr/local/bin/micromamba run -n cataloger python3 $SERVICE_DIR/run_server.py --ssl
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

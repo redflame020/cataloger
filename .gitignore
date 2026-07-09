@@ -1,9 +1,7 @@
-data/crops/
-data/crops_v*/
-data/debug_*
-data/uploads/
+# Data and images (not stored in git — synced separately)
+data/
+img/
 *.log
-ssl/
 __pycache__/
 *.pyc
 .DS_Store

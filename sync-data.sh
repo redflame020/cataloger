@@ -1,24 +1,27 @@
 #!/bin/bash
-# Sync catalog data to the Pi after deploying code via git.
-# Usage: ./sync-data.sh <pi-host>
-# Example: ./sync-data.sh pi@raspberrypi.local
+# Sync catalog data from this Mac to the Pi (aryabhata.local).
+# Usage: ./sync-data.sh
 
 set -e
-if [ $# -lt 1 ]; then
-  echo "Usage: $0 <pi-host>"
-  echo "Example: $0 pi@raspberrypi.local"
-  exit 1
-fi
+PI_HOST="aathreyak@aryabhata.local"
+REMOTE_DIR="~/Documents/software/cataloger"
+LOCAL_DATA="$(dirname "$0")/data"
 
-PI_HOST="$1"
-REMOTE_DIR="/home/pi/cataloger"
-
-echo "=== Syncing catalog data to $PI_HOST ==="
+echo "=== Syncing catalog data to Pi ==="
+echo "From: $LOCAL_DATA"
+echo "To:   $PI_HOST:$REMOTE_DIR/data/"
 echo ""
 
-# Sync data directory (crops, catalog.json, rooms.json)
-rsync -avz --progress data/ "$PI_HOST:$REMOTE_DIR/data/"
+# Pull latest code via git
+echo "[1/3] Pulling latest code on Pi..."
+ssh "$PI_HOST" "cd $REMOTE_DIR && git pull" || echo "Warning: git pull failed"
+
+# Sync data directory
+echo "[2/3] Syncing data..."
+rsync -avz --progress "$LOCAL_DATA/" "$PI_HOST:$REMOTE_DIR/data/"
+
+echo "[3/3] Restarting server..."
+ssh "$PI_HOST" "sudo systemctl restart cataloger"
 
 echo ""
 echo "=== Done! ==="
-echo "Restart the Pi server: ssh $PI_HOST sudo systemctl restart cataloger"
