@@ -1,0 +1,10 @@
+data/crops/
+data/crops_v*/
+data/debug_*
+data/uploads/
+*.log
+ssl/
+__pycache__/
+*.pyc
+.DS_Store
+/tmp

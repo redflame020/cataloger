@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Scan Cover — Cataloger</title>
+<link rel="stylesheet" href="/style.css?v=4">
+<script>
+if (location.protocol !== 'https:' && location.hostname !== 'localhost' && !location.hostname.startsWith('127.')) {
+  location.href = 'https://' + location.host + location.pathname;
+}
+</script>
+</head>
+<body class="cover-scan-body">
+<nav>
+  <a href="/" class="logo">📚 Cataloger</a>
+  <div class="nav-links">
+    <a href="/">Catalog</a>
+    <a href="/scan.html">Shelf</a>
+    <a href="/scan-cover.html" class="active">Cover</a>
+  </div>
+</nav>
+<main class="cover-scan">
+  <div class="location-picker">
+    <select id="scan-room"><option value="">Room...</option></select>
+    <select id="scan-shelf"><option value="">Shelf...</option></select>
+  </div>
+
+  <div class="camera-section" style="display:none">
+    <video id="camera-preview" autoplay playsinline style="display:none"></video>
+    <div class="camera-overlay" id="camera-overlay" style="display:none">
+      <div class="scanning-indicator" id="snap-status">Ready</div>
+    </div>
+    <div id="snapped-indicator" style="display:none;text-align:center;padding:40px 0;color:#888">
+      <div style="font-size:48px;margin-bottom:8px">📸</div>
+      <div>Processing...</div>
+    </div>
+  </div>
+
+  <div class="action-row" id="action-row" style="display:none;gap:8px">
+    <button class="snap-button" id="btn-snap" onclick="snap()" disabled>📸 Snap</button>
+    <button class="search-button" id="btn-search" onclick="doSearch()" disabled style="display:none">🔍 Search</button>
+  </div>
+
+  <div class="words-panel" id="words-panel" style="display:none">
+    <div class="words-header">
+      <h3>Words Captured</h3>
+      <span class="word-count" id="word-count">0</span>
+    </div>
+    <div class="word-cloud" id="word-cloud"><div class="hint">Snap the cover to start collecting words</div></div>
+  </div>
+
+  <div class="results-section" id="results-section" style="display:none">
+    <div id="annotated-container" style="display:none;margin-bottom:8px">
+      <img id="annotated-img" style="width:100%;border-radius:8px;border:1px solid #333">
+    </div>
+
+    <div class="approve-panel" id="approve-panel" style="display:none">
+      <h3>Book Details <button class="btn-small" onclick="showAllResults()">Show all results</button></h3>
+      <div class="book-json">
+        <label>Title <input type="text" id="edit-title" class="json-input" oninput="autoReSearch()"></label>
+        <label>Author <input type="text" id="edit-author" class="json-input" oninput="autoReSearch()"></label>
+        <label>ISBN <input type="text" id="edit-isbn" class="json-input"></label>
+        <label>Publisher <input type="text" id="edit-publisher" class="json-input"></label>
+        <label>Cover URL <input type="text" id="edit-cover" class="json-input"></label>
+      </div>
+
+      <div class="search-panel" id="search-panel" style="display:none;margin-top:12px">
+        <h3>Search Results</h3>
+        <div class="search-status" id="search-status"></div>
+        <div class="search-results" id="search-results"></div>
+      </div>
+
+      <div class="snap-again-row">
+        <button class="btn-snap-again" onclick="resetPanel()">📸 Snap More</button>
+        <button class="btn-snap-again" onclick="doSearch()" style="border-color:#4caf50;color:#4caf50">🔍 Search Again</button>
+      </div>
+      <div class="approve-actions">
+        <button class="btn-reject" onclick="resetPanel()">✕ Skip</button>
+        <button class="btn-approve" onclick="approveBook()">✓ Approve</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/app.js?v=2"></script>
+<script>
+let cameraReady = false;
+let currentRoom = '';
+let currentShelf = '';
+let currentBest = null;
+let allResults = [];
+let wordMap = {};
+let frameCount = 0;
+let llmTitle = '';
+let llmAuthor = '';
+let llmIsbn = '';
+let lastCoverSnap = '';
+
+async function loadRooms() {
+  const r = await fetch('/api/rooms');
+  const rooms = await r.json();
+  const sel = document.getElementById('scan-room');
+  sel.innerHTML = '<option value="">Room...</option>';
+  for (const [key, room] of Object.entries(rooms)) {
+    sel.innerHTML += `<option value="${key}">${room.name}</option>`;
+  }
+}
+
+function enableCamera() {
+  document.querySelector('.camera-section').style.display = 'block';
+  document.getElementById('action-row').style.display = 'flex';
+  document.getElementById('btn-snap').style.display = 'block';
+  document.getElementById('btn-snap').disabled = false;
+  tryCamera();
+}
+
+document.getElementById('scan-room').addEventListener('change', async function() {
+  currentRoom = this.value;
+  const shelfSel = document.getElementById('scan-shelf');
+  shelfSel.innerHTML = '<option value="">Shelf...</option>';
+  shelfSel.disabled = !this.value;
+  currentShelf = '';
+  if (this.value) {
+    const r = await fetch('/api/rooms');
+    const rooms = await r.json();
+    const room = rooms[this.value];
+    if (room && room.shelves) {
+      for (const [key, sh] of Object.entries(room.shelves)) {
+        shelfSel.innerHTML += `<option value="${key}">${sh.name}</option>`;
+      }
+    }
+  }
+  document.querySelector('.camera-section').style.display = 'none';
+  document.getElementById('action-row').style.display = 'none';
+  document.getElementById('btn-snap').style.display = 'none';
+  document.getElementById('btn-search').style.display = 'none';
+});
+
+document.getElementById('scan-shelf').addEventListener('change', function() {
+  currentShelf = this.value;
+  if (currentRoom && currentShelf) enableCamera();
+});
+
+document.addEventListener('DOMContentLoaded', () => { loadRooms(); });
+
+function tryCamera() {
+  const video = document.getElementById('camera-preview');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast('Camera not available on this device', 'error', 3000);
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+  }).then(stream => {
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      video.play();
+      video.style.display = 'block';
+      document.getElementById('camera-overlay').style.display = 'block';
+      cameraReady = true;
+      document.getElementById('btn-snap').disabled = false;
+    };
+  }).catch(() => {
+    showToast('Camera access denied', 'error', 3000);
+  });
+}
+
+async function snap() {
+  if (!currentRoom || !currentShelf) {
+    showToast('Select a room and shelf first', 'error');
+    return;
+  }
+  const video = document.getElementById('camera-preview');
+  if (!cameraReady || !video.videoWidth) {
+    showToast('Starting camera... tap Snap when you see the preview', 'success', 2000);
+    tryCamera();
+    return;
+  }
+  video.style.display = 'none';
+  document.getElementById('btn-snap').style.display = 'none';
+  document.getElementById('camera-overlay').style.display = 'none';
+  document.getElementById('snapped-indicator').style.display = 'block';
+
+  const blob = await captureFrame(video);
+  await processBlob(blob);
+}
+
+async function processBlob(blob) {
+  document.getElementById('words-panel').style.display = 'block';
+  document.getElementById('btn-snap').disabled = true;
+
+  const form = new FormData();
+  form.append('file', blob, 'snap.jpg');
+
+  try {
+    const r = await fetch('/api/scan-cover-live', { method: 'POST', body: form });
+    const data = await r.json();
+    frameCount++;
+    accumulateFrame(data);
+  } catch (e) {
+    showToast('Snap failed: ' + (e.message || e), 'error', 4000);
+  }
+
+  document.getElementById('snapped-indicator').style.display = 'none';
+  document.getElementById('btn-snap').style.display = 'block';
+  document.getElementById('btn-snap').disabled = false;
+  if (cameraReady) {
+    document.getElementById('camera-preview').style.display = 'block';
+    document.getElementById('camera-overlay').style.display = 'block';
+  }
+}
+
+function accumulateFrame(data) {
+  // Store LLM-parsed fields for fallback
+  if (data.title) llmTitle = data.title;
+  if (data.author) llmAuthor = data.author;
+  if (data.isbn) llmIsbn = data.isbn;
+  if (data.cover_snap) lastCoverSnap = data.cover_snap;
+
+  const rawWords = data.words || [];
+  const words = rawWords.filter(w => w.length >= 3);
+  wordMap = accumulateWords(wordMap, words, 3);
+
+  const sorted = Object.entries(wordMap).sort((a, b) => b[1] - a[1]);
+  const cloud = document.getElementById('word-cloud');
+  cloud.innerHTML = sorted.map(([w, c]) =>
+    `<span class="word-chip" style="font-size:${Math.min(1.6, 0.7 + c * 0.12)}em">${escapeHtml(w)} <small>(${c})</small></span>`
+  ).join('');
+  document.getElementById('word-count').textContent = `${sorted.length} words`;
+
+  // Pre-fill approval panel with LLM fields only on first snap
+  if (!fieldsAutoFilled && (llmTitle || llmAuthor)) {
+    document.getElementById('results-section').style.display = 'block';
+    showApprovePanel(null, llmTitle, llmAuthor, llmIsbn);
+    fieldsAutoFilled = true;
+  }
+
+  // Show annotation
+  const annot = data.annotated || '';
+  if (annot) {
+    document.getElementById('annotated-container').style.display = 'block';
+    document.getElementById('annotated-img').src = `/api/crops/${annot}?t=${Date.now()}`;
+  }
+
+  // Enable search button
+  document.getElementById('btn-search').style.display = 'block';
+  document.getElementById('btn-search').disabled = false;
+}
+
+async function doSearch(manualQuery, isAuto) {
+  if (!manualQuery && Object.keys(wordMap).length === 0) {
+    showToast('Snap the cover first', 'error');
+    return;
+  }
+  document.getElementById('btn-search').disabled = true;
+  document.getElementById('btn-search').textContent = '⏳';
+  document.getElementById('results-section').style.display = 'block';
+  const searchPanel = document.getElementById('search-panel');
+  const status = document.getElementById('search-status');
+  searchPanel.style.display = 'block';
+  status.textContent = 'Searching...';
+
+  const sortedWords = !manualQuery ? Object.entries(wordMap)
+    .sort((a, b) => b[1] - a[1])
+    .map(([w]) => w) : [];
+
+  const seenIsbns = new Set();
+  allResults = [];
+
+  if (manualQuery) {
+    try {
+      const r = await fetch(`/api/search-books?q=${encodeURIComponent(manualQuery)}`);
+      const results = await r.json();
+      for (const book of results) {
+        const key = book.isbn || book.title;
+        if (!seenIsbns.has(key)) { seenIsbns.add(key); allResults.push(book); }
+      }
+    } catch (e) {}
+  } else {
+    // Try LLM-parsed title + author (cleanest query)
+    const llmQuery = llmAuthor ? `${llmTitle} by ${llmAuthor}` : llmTitle;
+    if (llmQuery) {
+      try {
+        const r = await fetch(`/api/search-books?q=${encodeURIComponent(llmQuery)}`);
+        const results = await r.json();
+        for (const book of results) {
+          const key = book.isbn || book.title;
+          if (!seenIsbns.has(key)) { seenIsbns.add(key); allResults.push(book); }
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Multi-query: try different lengths of accumulated words
+  const queryLengths = manualQuery ? [] : [8, 15];
+  for (const n of queryLengths) {
+    const query = sortedWords.slice(0, n).join(' ');
+    if (!query) continue;
+    try {
+      const r = await fetch(`/api/search-books?q=${encodeURIComponent(query)}`);
+      const results = await r.json();
+      for (const book of results) {
+        const key = book.isbn || book.title;
+        if (!seenIsbns.has(key)) {
+          seenIsbns.add(key);
+          allResults.push(book);
+        }
+      }
+    } catch (e) {
+      // continue with next query length
+    }
+    if (allResults.length >= 5) break; // enough results
+  }
+
+  if (allResults.length === 0) {
+    status.textContent = 'No matches found. Edit the fields above and search again.';
+    document.getElementById('btn-search').textContent = '🔍 Search';
+    document.getElementById('btn-search').disabled = false;
+    return;
+  }
+
+  // Score results by word overlap with detected words
+  const detectedLower = new Set(Object.keys(wordMap));
+  for (const book of allResults) {
+    const text = (book.title + ' ' + (book.author || '')).toLowerCase();
+    const words = text.split(/\s+/);
+    const matches = words.filter(w => detectedLower.has(w)).length;
+    book._score = matches / Math.max(words.length, 1);
+  }
+  allResults.sort((a, b) => b._score - a._score);
+
+  status.textContent = `Found ${allResults.length} match(es) — tap one to select`;
+  if (isAuto) {
+    document.getElementById('btn-search').textContent = '🔍 Search';
+    document.getElementById('btn-search').disabled = false;
+  } else {
+    currentBest = allResults[0];
+    showApprovePanel(currentBest);
+    document.getElementById('btn-search').textContent = '🔍 Search';
+    document.getElementById('btn-search').disabled = false;
+  }
+
+  const container = document.getElementById('search-results');
+  container.innerHTML = allResults.slice(0, 5).map((book, i) =>
+    `<div class="search-result pickable" onclick="selectSearchResult(${i})">
+      ${book.cover_url ? `<img src="${book.cover_url}" class="result-cover" onerror="this.style.display='none'">` : ''}
+      <div class="result-info">
+        <strong>${escapeHtml(book.title)}</strong>
+        ${book.author ? `<br><em>${escapeHtml(book.author)}</em>` : ''}
+        ${book.isbn ? `<br><small>ISBN: ${book.isbn}</small>` : ''}
+      </div>
+    </div>`
+  ).join('');
+}
+
+function selectSearchResult(idx) {
+  const book = allResults[idx];
+  if (!book) return;
+  currentBest = book;
+  programmaticFill = true;
+  showApprovePanel(book);
+  document.getElementById('search-status').textContent = `Selected: ${book.title}`;
+}
+
+function showApprovePanel(book, fbTitle, fbAuthor, fbIsbn) {
+  programmaticFill = true;
+  const panel = document.getElementById('approve-panel');
+  panel.style.display = 'block';
+  document.getElementById('edit-title').value = book ? book.title : (fbTitle || '');
+  document.getElementById('edit-author').value = book ? book.author : (fbAuthor || '');
+  document.getElementById('edit-isbn').value = book ? book.isbn : (fbIsbn || '');
+  document.getElementById('edit-publisher').value = book ? book.publisher : '';
+  document.getElementById('edit-cover').value = book ? book.cover_url : '';
+}
+
+function showAllResults() {
+  if (allResults.length === 0) return;
+  const container = document.getElementById('search-results');
+  container.innerHTML = allResults.map((book, i) =>
+    `<div class="search-result pickable" onclick="selectResult(${i})">
+      ${book.cover_url ? `<img src="${book.cover_url}" class="result-cover" onerror="this.style.display='none'">` : ''}
+      <div class="result-info">
+        <strong>${escapeHtml(book.title)}</strong>
+        ${book.author ? `<br><em>${escapeHtml(book.author)}</em>` : ''}
+        ${book.isbn ? `<br><small>ISBN: ${book.isbn}</small>` : ''}
+      </div>
+    </div>`
+  ).join('');
+  document.getElementById('search-status').textContent = 'Tap a result to select:';
+}
+
+function selectResult(idx) {
+  currentBest = allResults[idx];
+  showApprovePanel(currentBest);
+  showToast('Selected: ' + currentBest.title, 'success', 1500);
+}
+
+let reSearchTimer = null;
+let reSearchCount = 0;
+let programmaticFill = false;
+let fieldsAutoFilled = false;
+
+function autoReSearch() {
+  if (programmaticFill) { programmaticFill = false; return; }
+  if (reSearchTimer) clearTimeout(reSearchTimer);
+  const myId = ++reSearchCount;
+  reSearchTimer = setTimeout(async () => {
+    const t = document.getElementById('edit-title').value.trim();
+    const a = document.getElementById('edit-author').value.trim();
+    if (t && t.length > 3) {
+      await doSearch(a ? `${t} by ${a}` : t, true);
+    }
+    if (myId !== reSearchCount) return;
+  }, 1200);
+}
+
+async function approveBook() {
+  if (!currentRoom || !currentShelf) {
+    showToast('Select a room and shelf', 'error');
+    return;
+  }
+  const title = document.getElementById('edit-title').value.trim();
+  if (!title) { showToast('Enter a title', 'error'); return; }
+
+  // Check for duplicates
+  const author = document.getElementById('edit-author').value.trim();
+  try {
+    const dupCheck = await fetch(`/api/check-duplicate?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}`);
+    const dupData = await dupCheck.json();
+    if (dupData.duplicate) {
+      const names = dupData.matches.map(m => `"${m.title}"${m.author ? ' by ' + m.author : ''}`).join('\n');
+      if (!confirm(`Duplicate found:\n${names}\n\nAdd anyway?`)) {
+        return;
+      }
+    }
+  } catch (e) {
+    // proceed anyway if check fails
+  }
+
+  const manualCover = document.getElementById('edit-cover').value.trim();
+  const olCover = (currentBest && currentBest.cover_url) ? currentBest.cover_url : '';
+  const payload = {
+    title,
+    author,
+    isbn: document.getElementById('edit-isbn').value.trim(),
+    publisher: document.getElementById('edit-publisher').value.trim(),
+    cover_url: manualCover || olCover,
+    snapped_cover: lastCoverSnap ? `/api/crops/${lastCoverSnap}` : '',
+    location_room: currentRoom,
+    location_shelf: currentShelf,
+    verified: true,
+    ocred_text: Object.entries(wordMap).map(([w, c]) => `${w}(${c})`).join(' '),
+  };
+
+  try {
+    const r = await fetch('/api/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (r.ok) {
+      showToast('Book added!', 'success');
+      resetPanel();
+    } else {
+      showToast('Failed to add book', 'error');
+    }
+  } catch (e) {
+    showToast('Network error', 'error');
+  }
+}
+
+function resetPanel() {
+  document.getElementById('results-section').style.display = 'none';
+  document.getElementById('search-panel').style.display = 'none';
+  document.getElementById('approve-panel').style.display = 'none';
+  document.getElementById('annotated-container').style.display = 'none';
+  document.getElementById('btn-search').style.display = 'none';
+  wordMap = {};
+  frameCount = 0;
+  currentBest = null;
+  allResults = [];
+  llmTitle = '';
+  llmAuthor = '';
+  llmIsbn = '';
+  lastCoverSnap = '';
+  fieldsAutoFilled = false;
+  document.getElementById('word-cloud').innerHTML = '<div class="hint">Snap the cover to start collecting words</div>';
+  document.getElementById('word-count').textContent = '0';
+  const video = document.getElementById('camera-preview');
+  if (video && video.srcObject) {
+    video.style.display = 'block';
+    document.getElementById('btn-snap').style.display = 'block';
+    document.getElementById('snapped-indicator').style.display = 'none';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rooms - Cataloger</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">📚 Cataloger</a>
+  <div class="nav-links">
+    <a href="/">Catalog</a>
+    <a href="/scan.html">Shelf</a>
+    <a href="/scan-cover.html">Cover</a>
+    <a href="/rooms.html">Rooms</a>
+    <a href="/loans.html">Loans</a>
+  </div>
+</nav>
+<main>
+  <h1>Rooms & Shelves</h1>
+  <div id="rooms-list"></div>
+</main>
+<script src="/app.js"></script>
+<script>
+let shelfBooksCache = {};
+let dragBookId = null;
+let dragSourceShelf = null;
+
+async function loadRooms() {
+  const r = await fetch('/api/rooms');
+  const rooms = await r.json();
+  const list = document.getElementById('rooms-list');
+
+  let html = '';
+  for (const [key, room] of Object.entries(rooms)) {
+    html += `<div class="room-card"><h2>${escapeHtml(room.name)}</h2><div class="shelf-list">`;
+    for (const [sk, sh] of Object.entries(room.shelves || {})) {
+      html += `<div class="shelf-item">
+        <span><strong>${escapeHtml(sh.name)}</strong></span>
+        <span class="shelf-images">${(sh.scan_images || []).length} image(s)</span>
+        <a href="/?room=${key}&shelf=${sk}" class="shelf-link">View books</a>
+        <button class="btn-small" onclick="showShelfLayout('${key}', '${sk}')">Layout</button>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+  list.innerHTML = html;
+}
+
+async function showShelfLayout(room, shelf) {
+  const r = await fetch(`/api/shelves/${room}/${shelf}/books`);
+  const books = await r.json();
+  shelfBooksCache[`${room}/${shelf}`] = books;
+
+  const placed = books.filter(b => b.shelf_order > 0).sort((a, b) => a.shelf_order - b.shelf_order);
+  const unplaced = books.filter(b => b.shelf_order === 0);
+
+  const roomName = room.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const shelfName = shelf.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+  let shelfHtml = `<div class="shelf-layout" data-room="${room}" data-shelf="${shelf}">
+    <h3>${escapeHtml(roomName)} — ${escapeHtml(shelfName)}</h3>`;
+
+  if (placed.length === 0) {
+    shelfHtml += `<div class="empty-shelf">No books placed on this shelf yet.</div>`;
+  } else {
+    shelfHtml += `<div class="shelf-bar" id="shelf-bar">`;
+    for (const b of placed) {
+      const shortTitle = b.title.length > 20 ? b.title.slice(0, 18) + '…' : b.title;
+      shelfHtml += `<div class="shelf-slot" draggable="true"
+        data-book-id="${b.id}" data-room="${room}" data-shelf="${shelf}"
+        ondragstart="dragStart(event)"
+        ondragover="dragOver(event)"
+        ondrop="dropBook(event)"
+        ondragend="dragEnd(event)"
+        onclick="window.location.href='/book.html?id=${b.id}'">
+        <span class="slot-order">${b.shelf_order}</span>
+        <span class="slot-title">${escapeHtml(shortTitle)}</span>
+      </div>`;
+    }
+    shelfHtml += `</div>`;
+  }
+
+  if (unplaced.length > 0) {
+    shelfHtml += `<details style="margin-top:12px">
+      <summary style="cursor:pointer;color:#888;font-size:13px">Unplaced books (${unplaced.length})</summary>
+      <div class="unplaced-list">`;
+    for (const b of unplaced) {
+      shelfHtml += `<div class="shelf-slot unplaced"
+        data-book-id="${b.id}" data-room="${room}" data-shelf="${shelf}"
+        draggable="true"
+        ondragstart="dragStart(event)"
+        ondragover="dragOver(event)"
+        ondrop="dropBook(event)"
+        ondragend="dragEnd(event)">
+        <span class="slot-title">${escapeHtml(b.title)}</span>
+      </div>`;
+    }
+    shelfHtml += `</div></details>`;
+  }
+
+  shelfHtml += `<button class="btn-small" onclick="saveShelfOrder('${room}', '${shelf}')" style="margin-top:8px">Save Order</button>
+    <span id="save-status-${room}-${shelf}" style="font-size:12px;color:#999;margin-left:8px"></span>
+  </div>`;
+
+  // Show as a modal overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-content">${shelfHtml}
+    <button class="btn-small" onclick="this.closest('.modal-overlay').remove()" style="margin-top:8px">Close</button>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+function dragStart(e) {
+  dragBookId = e.target.dataset.bookId;
+  dragSourceShelf = `${e.target.dataset.room}/${e.target.dataset.shelf}`;
+  e.target.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function dragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const slot = e.target.closest('.shelf-slot');
+  if (slot) slot.classList.add('drag-over');
+}
+
+function dropBook(e) {
+  e.preventDefault();
+  const target = e.target.closest('.shelf-slot');
+  if (!target || !dragBookId) return;
+
+  // Swap visual positions
+  const bar = target.closest('.shelf-bar') || target.closest('.unplaced-list');
+  if (!bar) return;
+
+  const slots = [...bar.querySelectorAll('.shelf-slot')];
+  const targetIdx = slots.indexOf(target);
+  const sourceSlot = bar.querySelector(`[data-book-id="${dragBookId}"]`);
+  if (!sourceSlot || targetIdx < 0) return;
+
+  const sourceIdx = slots.indexOf(sourceSlot);
+  if (sourceIdx < targetIdx) {
+    target.after(sourceSlot);
+  } else {
+    target.before(sourceSlot);
+  }
+
+  // Update order numbers
+  const allSlots = [...bar.querySelectorAll('.shelf-slot[draggable="true"]')];
+  allSlots.forEach((s, i) => {
+    const orderSpan = s.querySelector('.slot-order');
+    if (orderSpan) orderSpan.textContent = i + 1;
+  });
+}
+
+function dragEnd(e) {
+  e.target.classList.remove('dragging');
+  document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+
+async function saveShelfOrder(room, shelf) {
+  const status = document.getElementById(`save-status-${room}-${shelf}`);
+  status.textContent = 'Saving...';
+
+  const bar = document.querySelector(`.shelf-layout[data-room="${room}"][data-shelf="${shelf}"] .shelf-bar`);
+  const slots = bar ? [...bar.querySelectorAll('.shelf-slot[draggable="true"]')] : [];
+  const order = slots.map(s => s.dataset.bookId);
+
+  // Also add unplaced books at the end
+  const unplacedBar = document.querySelector(`.shelf-layout[data-room="${room}"][data-shelf="${shelf}"] .unplaced-list`);
+  if (unplacedBar) {
+    const unplacedSlots = [...unplacedBar.querySelectorAll('.shelf-slot[draggable="true"]')];
+    for (const s of unplacedSlots) {
+      if (!order.includes(s.dataset.bookId)) order.push(s.dataset.bookId);
+    }
+  }
+
+  try {
+    const r = await fetch(`/api/shelves/${room}/${shelf}/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    });
+    if (r.ok) {
+      status.textContent = 'Saved ✓';
+      setTimeout(() => status.textContent = '', 2000);
+    } else {
+      status.textContent = 'Save failed';
+    }
+  } catch (e) {
+    status.textContent = 'Save failed';
+  }
+}
+
+loadRooms();
+</script>
+</body>
+</html>

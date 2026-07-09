@@ -1,0 +1,15 @@
+[Unit]
+Description=Cataloger
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/cataloger
+ExecStart=/usr/bin/python3 /home/pi/cataloger/run_server.py --ssl
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loans - Cataloger</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">📚 Cataloger</a>
+  <div class="nav-links">
+    <a href="/">Catalog</a>
+    <a href="/scan.html">Scan</a>
+    <a href="/rooms.html">Rooms</a>
+    <a href="/loans.html">Loans</a>
+  </div>
+</nav>
+<main>
+  <h1>Loan History</h1>
+  <div id="loans-list"></div>
+</main>
+<script>
+async function loadLoans() {
+  const r = await fetch('/api/loans');
+  const loans = await r.json();
+  const list = document.getElementById('loans-list');
+  if (!loans.length) {
+    list.innerHTML = '<div class="empty">No loan history yet.</div>';
+    return;
+  }
+  list.innerHTML = `
+  <table>
+    <tr><th>Book</th><th>User</th><th>Checkout</th><th>Checkin</th></tr>
+    ${loans.map(l => `
+      <tr>
+        <td><a href="/book.html?id=${l.book_id}">${l.book_title}</a></td>
+        <td>${l.user}</td>
+        <td>${new Date(l.checkout).toLocaleDateString()}</td>
+        <td>${l.checkin ? new Date(l.checkin).toLocaleDateString() : '—'}</td>
+      </tr>
+    `).join('')}
+  </table>`;
+}
+loadLoans();
+</script>
+</body>
+</html>

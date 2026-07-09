@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Book - Cataloger</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">📚 Cataloger</a>
+  <div class="nav-links">
+    <a href="/">Catalog</a>
+    <a href="/scan.html">Shelf</a>
+    <a href="/scan-cover.html">Cover</a>
+    <a href="/rooms.html">Rooms</a>
+    <a href="/loans.html">Loans</a>
+  </div>
+</nav>
+<main>
+  <div id="book-detail"></div>
+</main>
+<script src="/app.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const bookId = params.get('id');
+let saveTimer = null;
+
+async function loadBook() {
+  const r = await fetch(`/api/books/${bookId}`);
+  const b = await r.json();
+  const detail = document.getElementById('book-detail');
+  const cropFilename = b.spine_crop ? b.spine_crop.split('/').pop() : '';
+
+  // Determine shelf position info
+  let shelfHtml = '';
+  if (b.location_room && b.location_shelf) {
+    if (b.shelf_order > 0) {
+      shelfHtml = `<p><strong>Shelf position:</strong> book #${b.shelf_order} from the left
+        <button class="btn-small" onclick="moveShelf('left')" ${b.shelf_order <= 1 ? 'disabled' : ''}>◀</button>
+        <button class="btn-small" onclick="moveShelf('right')">▶</button>
+        <span id="move-status" style="font-size:12px;color:#999;margin-left:8px"></span>
+      </p>`;
+    } else {
+      shelfHtml = `<p><strong>Shelf position:</strong> (unplaced — <a href="/rooms.html">arrange on shelf page</a>)</p>`;
+    }
+  }
+
+  detail.innerHTML = `
+    <button onclick="history.back()" class="back-btn">← Back</button>
+    <div class="book-detail">
+      ${cropFilename ? `<div class="detail-crop"><img src="/api/crops/${cropFilename}" alt="Spine" style="max-height:300px"></div>` : ''}
+      <div class="detail-info">
+        <div class="cover-images">
+          ${b.snapped_cover ? `<div class="detail-cover"><img src="${b.snapped_cover}" alt="Snapped cover" style="max-width:160px;max-height:240px;border-radius:8px;border:1px solid #ddd"></div>` : ''}
+          ${b.cover_url && b.cover_url !== b.snapped_cover ? `<div class="detail-cover"><a href="${b.cover_url}" target="_blank"><img src="${b.cover_url}" alt="Official cover" style="max-width:160px;max-height:240px;border-radius:8px;border:1px solid #ddd"></a></div>` : ''}
+        </div>
+        <h1>${escapeHtml(b.title)} ${!b.verified ? '<span class="status-badge unverified">unverified</span>' : ''}</h1>
+        <p><strong>Author:</strong> ${escapeHtml(b.author || '(unknown)')}</p>
+        <p><strong>ISBN:</strong> ${b.isbn || '(none)'}</p>
+        <p><strong>Publisher:</strong> ${b.publisher || '(none)'}</p>
+        <p><strong>Status:</strong> <span class="status-badge ${b.verified ? b.status : 'unverified'}">${b.verified ? b.status : 'unverified'}</span></p>
+        <p><strong>Location:</strong> ${b.location_room || '?'} / ${b.location_shelf || '?'}</p>
+        ${shelfHtml}
+        <p><strong>History:</strong></p>
+        <textarea id="edit-history" oninput="autoSaveHistory()" style="width:100%;min-height:80px;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:inherit;resize:vertical">${escapeHtml(b.history || '')}</textarea>
+        <div id="history-save-status" style="font-size:12px;color:#999;margin-top:2px"></div>
+        ${b.ocred_text ? `<p><strong>OCR Text:</strong> <em>${escapeHtml(b.ocred_text)}</em></p>` : ''}
+        <div class="detail-actions">
+          ${!b.verified ? `<button onclick="verifyBook()" class="primary">✓ Mark as Verified</button>` : ''}
+          <input type="text" id="checkout-user" placeholder="User name">
+          <button onclick="checkoutBook()" ${b.status !== 'available' || !b.verified ? 'disabled' : ''}>Check Out</button>
+          <button onclick="checkinBook()" ${b.status !== 'checked_out' ? 'disabled' : ''}>Check In</button>
+          <button onclick="deleteBook()" style="background:#e74c3c;color:#fff;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Delete</button>
+        </div>
+        <div class="detail-loans" id="loans-list"></div>
+      </div>
+    </div>
+  `;
+}
+
+async function moveShelf(direction) {
+  document.getElementById('move-status').textContent = 'Moving...';
+  const r = await fetch(`/api/books/${bookId}/swap`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ direction }),
+  });
+  if (r.ok) {
+    document.getElementById('move-status').textContent = 'Moved ✓';
+    loadBook();
+  } else {
+    document.getElementById('move-status').textContent = 'Cannot move further';
+  }
+}
+
+function autoSaveHistory() {
+  const status = document.getElementById('history-save-status');
+  status.textContent = 'Unsaved changes...';
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const val = document.getElementById('edit-history').value;
+    const r = await fetch(`/api/books/${bookId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ history: val }),
+    });
+    if (r.ok) {
+      status.textContent = 'Saved ✓';
+      setTimeout(() => { status.textContent = ''; }, 2000);
+    } else {
+      status.textContent = 'Save failed';
+    }
+  }, 800);
+}
+
+async function verifyBook() {
+  await fetch(`/api/books/${bookId}/verify`, { method: 'POST' });
+  showToast('Book verified!', 'success', 1500);
+  loadBook();
+}
+
+async function checkoutBook() {
+  const user = document.getElementById('checkout-user').value;
+  if (!user) { showToast('Enter a user name', 'error', 2000); return; }
+  const r = await fetch(`/api/books/${bookId}/checkout`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user }),
+  });
+  if (!r.ok) {
+    const err = await r.json();
+    showToast(err.detail || 'Checkout failed', 'error', 2000);
+    return;
+  }
+  showToast('Checked out!', 'success', 1500);
+  loadBook();
+}
+
+async function checkinBook() {
+  const r = await fetch(`/api/books/${bookId}/checkin`, { method: 'POST' });
+  if (!r.ok) { showToast('Checkin failed', 'error', 2000); return; }
+  showToast('Checked in!', 'success', 1500);
+  loadBook();
+}
+
+async function deleteBook() {
+  if (!confirm('Delete this book?')) return;
+  await fetch(`/api/books/${bookId}`, { method: 'DELETE' });
+  showToast('Deleted', 'success', 1500);
+  setTimeout(() => { window.location.href = '/'; }, 500);
+}
+
+loadBook();
+</script>
+</body>
+</html>

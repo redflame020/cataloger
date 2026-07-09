@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scan Shelf - Cataloger</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">📚 Cataloger</a>
+  <div class="nav-links">
+    <a href="/">Catalog</a>
+    <a href="/scan.html">Shelf</a>
+    <a href="/scan-cover.html">Cover</a>
+    <a href="/rooms.html">Rooms</a>
+    <a href="/loans.html">Loans</a>
+  </div>
+</nav>
+<main>
+  <h1>Scan Bookshelf</h1>
+  <div class="scan-upload">
+    <input type="file" id="file-input" accept="image/*" multiple>
+    <select id="scan-room"><option value="">Select room...</option></select>
+    <select id="scan-shelf"><option value="">Select shelf...</option></select>
+    <button onclick="startScan()">Scan</button>
+  </div>
+  <div id="scan-status"></div>
+  <div id="scan-results"></div>
+  <div id="scan-actions" style="display:none">
+    <button onclick="importSelected()" class="primary">Import Selected</button>
+    <button onclick="rejectAll()">Reject All</button>
+  </div>
+  <div style="margin-top:24px;padding:12px;background:#fff3e0;border-radius:8px;font-size:13px;color:#e65100">
+    💡 <strong>Tip:</strong> For better results, try scanning each book's <a href="/scan-cover.html" style="color:#e65100">front cover</a> instead. Cover scans use the camera and auto-search OpenLibrary for accurate titles.
+  </div>
+</main>
+<script>
+let currentScan = null;
+let spineStates = {};
+
+async function loadRooms() {
+  const r = await fetch('/api/rooms');
+  const rooms = await r.json();
+  const sel = document.getElementById('scan-room');
+  sel.innerHTML = '<option value="">Select room...</option>';
+  for (const [key, room] of Object.entries(rooms)) {
+    sel.innerHTML += `<option value="${key}">${room.name}</option>`;
+  }
+}
+
+document.getElementById('scan-room').addEventListener('change', async function() {
+  const shelfSel = document.getElementById('scan-shelf');
+  shelfSel.innerHTML = '<option value="">Select shelf...</option>';
+  if (this.value) {
+    const r = await fetch('/api/rooms');
+    const rooms = await r.json();
+    const room = rooms[this.value];
+    if (room && room.shelves) {
+      for (const [key, sh] of Object.entries(room.shelves)) {
+        shelfSel.innerHTML += `<option value="${key}">${sh.name}</option>`;
+      }
+    }
+  }
+});
+
+async function startScan() {
+  const files = document.getElementById('file-input').files;
+  const room = document.getElementById('scan-room').value;
+  const shelf = document.getElementById('scan-shelf').value;
+  if (!files.length || !room || !shelf) {
+    alert('Please select files, a room, and a shelf.');
+    return;
+  }
+  const status = document.getElementById('scan-status');
+  const results = document.getElementById('scan-results');
+  const actions = document.getElementById('scan-actions');
+  results.innerHTML = '';
+  actions.style.display = 'none';
+  currentScan = { room, shelf, spines: [] };
+  spineStates = {};
+
+  for (const file of files) {
+    status.textContent = `Scanning ${file.name}...`;
+    const form = new FormData();
+    form.append('file', file);
+    const r = await fetch('/api/scan', { method: 'POST', body: form });
+    const data = await r.json();
+    const detected = data.detected_spines || [];
+    for (const spine of detected) {
+      spine.source_image = file.name;
+      spine._accepted = true;
+      const sid = spine.id;
+      spineStates[sid] = true;
+      currentScan.spines.push(spine);
+    }
+  }
+
+  renderResults();
+  status.textContent = `Detected ${currentScan.spines.length} spine(s). Review below.`;
+  actions.style.display = 'block';
+}
+
+function renderResults() {
+  const results = document.getElementById('scan-results');
+  if (!currentScan || !currentScan.spines.length) {
+    results.innerHTML = '<div class="empty">No spines detected.</div>';
+    return;
+  }
+  results.innerHTML = currentScan.spines.map((s, i) => `
+    <div class="spine-item ${spineStates[s.id] ? 'accepted' : 'rejected'}" data-id="${s.id}">
+      <div class="spine-crop">
+        <img src="/api/crops/${s.crop_path.split('/').pop()}" alt="Spine" style="max-height:150px">
+      </div>
+      <div class="spine-info">
+        <input type="text" class="spine-title" value="${escapeHtml(s.text || '')}" placeholder="Book title" data-id="${s.id}">
+        <input type="text" class="spine-author" placeholder="Author" data-id="${s.id}">
+        <input type="text" class="spine-isbn" value="${s.isbn || ''}" placeholder="ISBN" data-id="${s.id}">
+        <div class="spine-text">OCR: ${escapeHtml(s.text || '(no text)')}</div>
+      </div>
+      <div class="spine-actions">
+        <button class="toggle-spine" data-id="${s.id}">${spineStates[s.id] ? '✓ Accepted' : '✗ Rejected'}</button>
+      </div>
+    </div>
+  `).join('');
+
+  document.querySelectorAll('.toggle-spine').forEach(btn => {
+    btn.addEventListener('click', function() {
+      const id = this.dataset.id;
+      spineStates[id] = !spineStates[id];
+      renderResults();
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+async function importSelected() {
+  const spines = currentScan.spines
+    .filter(s => spineStates[s.id])
+    .map(s => {
+      const el = document.querySelector(`.spine-item[data-id="${s.id}"]`);
+      return {
+        id: s.id,
+        text: s.text,
+        isbn: el ? el.querySelector('.spine-isbn').value : s.isbn,
+        title: el ? el.querySelector('.spine-title').value : s.text,
+        author: el ? el.querySelector('.spine-author').value : '',
+        crop_path: s.crop_path,
+        source_image: s.source_image,
+      };
+    });
+  if (!spines.length) {
+    alert('No spines selected.');
+    return;
+  }
+  const r = await fetch('/api/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      room: currentScan.room,
+      shelf: currentScan.shelf,
+      spines,
+    }),
+  });
+  const data = await r.json();
+  document.getElementById('scan-status').textContent = `Imported ${data.imported.length} book(s) (unverified)!`;
+  document.getElementById('scan-actions').style.display = 'none';
+  document.getElementById('scan-results').innerHTML = `<div class="empty">Done! <a href="/">View catalog</a></div>`;
+}
+
+function rejectAll() {
+  for (const sid in spineStates) spineStates[sid] = false;
+  renderResults();
+}
+
+loadRooms();
+</script>
+</body>
+</html>

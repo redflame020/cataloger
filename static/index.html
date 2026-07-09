@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cataloger</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<nav>
+  <a href="/" class="logo">📚 Cataloger</a>
+  <div class="nav-links">
+    <a href="/">Catalog</a>
+    <a href="/scan.html">Shelf</a>
+    <a href="/scan-cover.html">Cover</a>
+    <a href="/rooms.html">Rooms</a>
+    <a href="/loans.html">Loans</a>
+  </div>
+</nav>
+<main>
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Search by title or author..." oninput="loadBooks()">
+    <select id="filter-room" onchange="loadBooks()">
+      <option value="">All Rooms</option>
+    </select>
+    <select id="filter-shelf" onchange="loadBooks()">
+      <option value="">All Shelves</option>
+    </select>
+    <select id="filter-verified" onchange="loadBooks()">
+      <option value="">All Books</option>
+      <option value="true">Verified</option>
+      <option value="false">Unverified</option>
+    </select>
+    <button class="btn-danger" onclick="deleteUnverified()">Delete Unverified</button>
+  </div>
+  <div id="book-grid" class="book-grid"></div>
+</main>
+<script src="/app.js"></script>
+<script>
+let allBooks = [];
+
+async function loadRooms() {
+  const r = await fetch('/api/rooms');
+  const rooms = await r.json();
+  const sel = document.getElementById('filter-room');
+  sel.innerHTML = '<option value="">All Rooms</option>';
+  for (const [key, room] of Object.entries(rooms)) {
+    sel.innerHTML += `<option value="${key}">${room.name}</option>`;
+  }
+}
+
+async function loadBooks() {
+  const search = document.getElementById('search').value;
+  const room = document.getElementById('filter-room').value;
+  const shelf = document.getElementById('filter-shelf').value;
+  const verified = document.getElementById('filter-verified').value;
+  const params = new URLSearchParams({ search, room, shelf, verified });
+  const r = await fetch(`/api/books?${params}`);
+  allBooks = await r.json();
+  const grid = document.getElementById('book-grid');
+  if (allBooks.length === 0) {
+    grid.innerHTML = '<div class="empty">No books yet. <a href="/scan.html">Scan a shelf</a> or <a href="/scan-cover.html">scan a cover</a>!</div>';
+    return;
+  }
+  grid.innerHTML = allBooks.map(b => `
+    <a href="/book.html?id=${b.id}" class="book-card ${!b.verified ? 'unverified' : ''} ${b.status}">
+      <div class="card-title">${escapeHtml(b.title || '(untitled)')}</div>
+      <div class="card-author">${escapeHtml(b.author || '')}</div>
+      <div class="card-meta">
+        <span>${b.isbn ? 'ISBN: ' + b.isbn : ''}</span>
+        <span class="status-badge ${b.verified ? b.status : 'unverified'}">${b.verified ? b.status : 'unverified'}</span>
+      </div>
+    </a>
+  `).join('');
+}
+
+document.getElementById('filter-room').addEventListener('change', async function() {
+  const shelfSel = document.getElementById('filter-shelf');
+  shelfSel.innerHTML = '<option value="">All Shelves</option>';
+  if (this.value) {
+    const r = await fetch('/api/rooms');
+    const rooms = await r.json();
+    const room = rooms[this.value];
+    if (room && room.shelves) {
+      for (const [key, sh] of Object.entries(room.shelves)) {
+        shelfSel.innerHTML += `<option value="${key}">${sh.name}</option>`;
+      }
+    }
+  }
+});
+
+async function deleteUnverified() {
+  if (!confirm('Delete all unverified books?')) return;
+  const r = await fetch('/api/books/unverified', { method: 'DELETE' });
+  const data = await r.json();
+  showToast(`Deleted ${data.deleted} unverified book(s)`, 'success', 2000);
+  loadBooks();
+}
+
+loadRooms();
+loadBooks();
+</script>
+</body>
+</html>
